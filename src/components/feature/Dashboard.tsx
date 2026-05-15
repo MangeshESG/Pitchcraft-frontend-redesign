@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import API_BASE_URL from "../../config";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlayCircle,
@@ -63,6 +64,8 @@ export interface DashboardProps {
   setupComplete?: boolean;
   /** First name used in the welcome line. */
   firstName?: string;
+  /** Client/user ID used for API step-completion checks. */
+  clientId?: number | string;
   /** Onboarding step statuses keyed by step id (blueprint/contacts/campaign/kraft/schedule). */
   stepStatus?: Partial<Record<string, StepStatus>>;
   /** KPI numbers — pass real values once available. */
@@ -825,9 +828,125 @@ const PostOnboardingView: React.FC<{
 export const Dashboard: React.FC<DashboardProps> = ({
   setupComplete,
   firstName,
-  stepStatus,
+  clientId,
+  stepStatus: externalStepStatus,
   kpis,
 }) => {
+  const [detectedStatus, setDetectedStatus] = useState<
+    Partial<Record<string, StepStatus>> | undefined
+  >(undefined);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    if (!clientId || typeof setupComplete === "boolean" || externalStepStatus) return;
+
+    let cancelled = false;
+    setChecking(true);
+
+    const detect = async () => {
+      try {
+        const id = clientId;
+
+        const [templatesRes, dataFilesRes, campaignsRes, scheduleRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/CampaignPrompt/templates/${id}`).then((r) =>
+            r.ok ? r.json() : []
+          ),
+          fetch(`${API_BASE_URL}/api/Crm/datafile-byclientid?clientId=${id}`).then((r) =>
+            r.ok ? r.json() : []
+          ),
+          fetch(`${API_BASE_URL}/api/auth/campaigns/client/${id}`).then((r) =>
+            r.ok ? r.json() : []
+          ),
+          fetch(`${API_BASE_URL}/api/email/get-sequence?ClientId=${id}`).then((r) =>
+            r.ok ? r.json() : []
+          ),
+        ]);
+
+        const blueprintDone = Array.isArray(templatesRes) && templatesRes.length > 0;
+        const realFiles = Array.isArray(dataFilesRes)
+          ? dataFilesRes.filter((f: any) => f.id !== -1 && f.id !== "-1")
+          : [];
+        const contactsDone = realFiles.length > 0;
+        const campaignList = Array.isArray(campaignsRes) ? campaignsRes : [];
+        const campaignDone = campaignList.length > 0;
+        const scheduleDone = Array.isArray(scheduleRes) && scheduleRes.length > 0;
+
+        // Check kraft: if there are campaigns, fetch contacts for the first one
+        // and see if any have an email generated (pitch / email_body present)
+        let kraftDone = false;
+        if (campaignDone) {
+          const firstCampaign = campaignList[0];
+          const campaignId =
+            firstCampaign?.id ?? firstCampaign?.campaignId ?? firstCampaign?.campaign_id;
+          const dataFileId =
+            firstCampaign?.dataFileId ??
+            firstCampaign?.data_file_id ??
+            firstCampaign?.datafileid;
+
+          if (dataFileId != null) {
+            try {
+              const contactsRes = await fetch(
+                `${API_BASE_URL}/api/crm/contacts/by-client-datafile?clientId=${id}&dataFileId=${dataFileId}&isFollowUp=false&notKrafted=false&kraftedNotSent=false`
+              ).then((r) => (r.ok ? r.json() : []));
+              const contacts = Array.isArray(contactsRes) ? contactsRes : [];
+              kraftDone = contacts.some(
+                (c: any) =>
+                  c.pitch ||
+                  c.email_body ||
+                  c.sample_email_body ||
+                  c.isKrafted === true ||
+                  c.isKrafted === 1
+              );
+            } catch {
+              kraftDone = false;
+            }
+          } else if (campaignId != null) {
+            // Fallback: try view-contacts with campaignId
+            try {
+              const contactsRes = await fetch(`${API_BASE_URL}/api/Crm/view-contacts`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ clientId: id, campaignId, notKrafted: false }),
+              }).then((r) => (r.ok ? r.json() : []));
+              const contacts = Array.isArray(contactsRes) ? contactsRes : [];
+              kraftDone = contacts.some(
+                (c: any) =>
+                  c.pitch ||
+                  c.email_body ||
+                  c.sample_email_body ||
+                  c.isKrafted === true ||
+                  c.isKrafted === 1
+              );
+            } catch {
+              kraftDone = false;
+            }
+          }
+        }
+
+        if (!cancelled) {
+          setDetectedStatus({
+            blueprint: blueprintDone ? "done" : "active",
+            contacts: contactsDone ? "done" : blueprintDone ? "active" : "todo",
+            campaign: campaignDone ? "done" : contactsDone ? "active" : "todo",
+            kraft: kraftDone ? "done" : campaignDone ? "active" : "todo",
+            schedule: scheduleDone ? "done" : kraftDone ? "active" : "todo",
+          });
+        }
+      } catch {
+        // silently fall back to onboarding view with no statuses
+      } finally {
+        if (!cancelled) setChecking(false);
+      }
+    };
+
+    detect();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, setupComplete, externalStepStatus]);
+
+  const stepStatus = externalStepStatus ?? detectedStatus;
+
   const derivedComplete = useMemo(() => {
     if (typeof setupComplete === "boolean") return setupComplete;
     if (!stepStatus) return false;
@@ -836,6 +955,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [setupComplete, stepStatus]);
 
   const name = firstName || "there";
+
+  if (checking && !stepStatus) {
+    return (
+      <div className="mx-auto max-w-[1200px] flex items-center justify-center py-20">
+        <div className="text-gray-400 text-sm">Loading your workspace…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[1200px]">

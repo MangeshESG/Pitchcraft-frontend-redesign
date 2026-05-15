@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.anthropic.com)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "Bash(gh pr create --title 'Redesign Dashboard: onboarding checklist \\(A\\) + KPI tiles \\(K1\\)' --body ' *)",
+      "PowerShell(Get-Command gh -ErrorAction SilentlyContinue)",
+      "PowerShell(Add-Type -AssemblyName System.Security; $cred = [System.Net.NetworkCredential]::new\\(\\); $cm = New-Object System.Net.CredentialCache; $wc = New-Object System.Net.WebClient; $wc.UseDefaultCredentials = $true; $nc = [System.Net.CredentialCache]::DefaultNetworkCredentials; $token = $nc.Password; Write-Output \"token_len=$\\($token.Length\\)\")"
+    ]
+  }
+}

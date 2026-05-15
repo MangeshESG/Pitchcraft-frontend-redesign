@@ -4400,7 +4400,7 @@ try {
 
             {shouldRenderTab("Dashboard") && (
               <div className="tab-content preserved-tab-panel" style={getTabPanelStyle(tab === "Dashboard")}>
-                <Dashboard />
+                <Dashboard firstName={firstName} />
               </div>
             )}
 

@@ -1,0 +1,270 @@
+/* 🌟 Page Container */
+.page.login-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  /*background-color: #f4f4f4;*/
+  background: url('../assets/images/background.jpeg') center center/cover no-repeat #f4f4f4;
+}
+
+/* 🌟 Box Wrapper */
+.login-boxx {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  width: 400px;
+  animation: fadeIn 0.4s ease-in-out;
+  position: relative;
+  margin-top: 100px;
+}
+
+/* Fade-in animation for smooth UX */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 🌟 Headings */
+.login-boxx h2 {
+  position: absolute;
+  top: -40px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #ffffff; /* white text */
+  font-size: 24px;
+  font-weight: 400;
+  margin: 0;
+  text-align: center;
+  background: transparent;
+  z-index: 10; /* makes sure it stays on top */
+}
+
+/* 🌟 Form */
+.login-boxx form {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Labels */
+.login-boxx label {
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+}
+
+/* Inputs */
+.login-boxx input {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-size: 14px;
+  height: 40px;
+}
+.login-boxx input:focus {
+  border-color: #ddd;  /* Keeps it the same as normal state */
+  box-shadow: lightgreen;     /* Removes shadow effect on focus */
+}
+/* 🌟 Buttons */
+.login-button,
+.register-button {
+  background: #3f9f42;
+  color: white;
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  margin-top: 0.3rem;
+  transition: all 0.3s ease;
+  font-size: 14px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-button:hover,
+.register-button:hover {
+  opacity: 0.9;
+}
+
+.login-button:disabled,
+.register-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #ffffff;
+  animation: spin 1s ease-in-out infinite;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 🌟 Links for switch between views */
+.register-link {
+  margin-top: 1rem;
+  text-align: center;
+  font-size: 14px;
+  color: #333;
+}
+.register-link a {
+  color: #333;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.register-link a:hover {
+  text-decoration: underline;
+}
+
+/* 🌟 Messages */
+.error-message {
+  color: red;
+  margin-bottom: 1rem;
+  font-size: 14px;
+}
+.success-message {
+  color: green;
+  background-color: #e6ffed;
+  border: 1px solid #a2f5a2;
+  padding: 8px;
+  font-size: 14px;
+  border-radius: 4px;
+  margin-top: 10px;
+}
+.name-fields {
+  display: flex;               /* Use Flexbox layout */
+  justify-content: space-between; /* Space them out evenly */
+  gap: 20px;                   /* Space between inputs */
+  margin-bottom: -10px;         /* Space below the input fields */
+}
+
+/* Styling for each input field container */
+.name-field {
+  flex: 1;                      /* Each input takes equal width */
+}
+
+/* Styling for the label */
+.name-field label {
+  display: block;               /* Ensure label takes full width */
+  margin-bottom: 5px;           /* Add space between label and input */
+}
+
+/* Styling for the input fields */
+.name-field input {
+  width: 100%;                  /* Make the input fill the container */
+  padding: 12px;                /* Add padding inside the input */
+  border: 1px solid #ccc;      /* Border style */
+  border-radius: 4px;          /* Rounded corners */
+  box-sizing: border-box;      /* Make padding and border part of the width */
+}
+
+.register-offset {
+  margin-top: 30px; /* or any value that works for your layout */
+}
+.password-wrapper {
+  position: relative;
+}
+
+.password-wrapper input {
+  width: 100%;
+  padding-right: 40px;
+  border: 1.5px solid #ccc;
+  border-radius: 12px;
+  height: 38px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.password-wrapper.valid input {
+  border-color:#ccc; /* green */
+}
+
+.password-wrapper.invalid input {
+  border-color: #d93025; /* red */
+}
+
+.password-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  color: #555;
+  font-size: 1.2rem;
+}
+
+.password-validation {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+/* .valid-text {
+  color: #00b140;
+}
+
+.invalid-text {
+  color: #d93025;
+} */
+ .password-hint {
+  margin-top: 5px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Gray ✓ hint when valid */
+.hint-valid {
+  color: #777;
+}
+
+/* Red hint when invalid */
+.hint-invalid {
+  color: #d93025;
+}
+
+
+.consent-field {
+  margin-top: 10px;
+  font-size: 7px;     /* smaller text */
+  line-height: 1.4;
+  color: #333;
+}
+
+.consent-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.consent-label span {
+  font-size: 12px;      /* choose size you like */
+  font-weight: 400;     /* optional – makes it lighter */
+  line-height: 1.4;
+}
+
+.consent-label input {
+  margin-top: 2px;
+}
+.consent-field a {
+  color: #1a9c46;      /* PitchKraft-style green */
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.consent-field a:hover {
+  text-decoration: underline;
+}

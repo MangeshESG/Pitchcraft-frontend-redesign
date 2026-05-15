@@ -1,0 +1,1278 @@
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
+import { Tooltip as ReactTooltip } from "react-tooltip";
+import Modal from "../common/Modal";
+import ValidationErrorModal from "../common/ValidationErrorModal";
+import "./datafile.css";
+import API_BASE_URL from "../../config";
+import { useAppData } from "../../contexts/AppDataContext";
+import { useSelector } from "react-redux";
+import { RootState } from "../../Redux/store";
+interface DataFileProps {
+  selectedClient: string;
+  onDataProcessed: (data: any[]) => void;
+  isProcessing?: boolean;
+  onBack?: () => void;
+}
+
+interface ColumnMapping {
+  [key: string]: string;
+}
+
+interface ProcessedContact {
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
+  name: string;
+  email: string;
+  job_title?: string;
+  company?: string;
+  location?: string;
+  linkedin?: string;
+  company_website?: string;
+  email_body?: string;
+  email_subject?: string;
+  company_telephone?: string;
+  company_employee_count?: string;
+  company_industry?: string;
+  company_linkedin_url?: string;
+  linkedIninformation?: string;
+    customFields?: Record<string, string>;
+
+}
+
+const REQUIRED_FIELDS = [
+  { key: "first_name", label: "First name", required: false },
+  { key: "last_name", label: "Last name", required: false },
+  { key: "full_name", label: "Full name", required: false },
+  { key: "email", label: "Email address", required: true },
+  { key: "job_title", label: <>Job title <span style={{ color: "blue" }}>*</span></>, required: false },
+  { key: "company", label: <>Company Name <span style={{ color: "blue" }}>*</span></>, required: false },
+  { key: "location", label: <>Company Location <span style={{ color: "blue" }}>*</span></>, required: false },
+  { key: "linkedin", label: "LinkedIn URL", required: false },
+  { key: "company_website", label: <>Company website <span style={{ color: "blue" }}>*</span></>, required: false },
+  { key: "company_telephone", label: "Company telephone", required: false },
+  {
+    key: "company_employee_count",
+    label: "Company employee count",
+    required: false,
+  },
+  { key: "company_industry", label: <>Company industry <span style={{ color: "blue" }}>*</span></>, required: false },
+  {
+    key: "company_linkedin_url",
+    label: "Company LinkedIn URL",
+    required: false,
+  },
+  { key: "linkedIninformation", label: "LinkedIn summary", required: false },
+];
+
+const DataFile: React.FC<DataFileProps> = ({
+  selectedClient,
+  onDataProcessed,
+  isProcessing = false,
+  onBack,
+}) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [excelData, setExcelData] = useState<any[]>([]);
+  const [columnHeaders, setColumnHeaders] = useState<string[]>([]);
+  const [columnMappings, setColumnMappings] = useState<ColumnMapping>({});
+  const [previewData, setPreviewData] = useState<ProcessedContact[]>([]);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [validationErrors, setValidationErrors] = useState<Array<{row: number, field: string, value: string, message: string}>>([]);
+  const [showValidationModal, setShowValidationModal] = useState(false);
+  const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [showErrorToast, setShowErrorToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [processingStats, setProcessingStats] = useState({
+    total: 0,
+    valid: 0,
+    invalid: 0,
+  });
+  const [isDragActive, setIsDragActive] = useState(false);
+  const reduxUserId = useSelector((state: RootState) => state.auth.userId);
+ const effectiveUserId = selectedClient !== "" ? selectedClient : reduxUserId;
+
+  const [showDataFileModal, setShowDataFileModal] = useState(false);
+  const [dataFileInfo, setDataFileInfo] = useState<DataFileInfo>({
+    name: "",
+    description: "",
+  });
+  const [validatedData, setValidatedData] = useState<ProcessedContact[]>([]);
+  const { triggerRefresh } = useAppData();
+
+  interface DataFileInfo {
+    name: string;
+    description: string;
+  }
+  const toastAnimation = `
+@keyframes toastProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+`;
+
+  const showImportToast = (message: string, type: "success" | "error") => {
+    setToastMessage(message);
+
+    if (type === "success") {
+      setShowErrorToast(false);
+      setShowSuccessToast(true);
+      setTimeout(() => setShowSuccessToast(false), 6000);
+      return;
+    }
+
+    setShowSuccessToast(false);
+    setShowErrorToast(true);
+    setTimeout(() => setShowErrorToast(false), 6000);
+  };
+
+  interface CustomField {
+  id: number;
+  field_name: string;
+  field_type: string;
+}
+
+const [customFields, setCustomFields] = useState<CustomField[]>([]);
+const allFields = React.useMemo(() => [
+  ...REQUIRED_FIELDS,
+  ...customFields.map((f: CustomField) => ({
+    key: `custom_${f.field_name}`,
+    label: f.field_name,
+    required: false,
+    isCustom: true,
+  })),
+], [customFields]);
+useEffect(() => {
+  const fetchCustomFields = async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/Crm/custom-fields?clientId=${effectiveUserId}`
+      );
+      const data = await res.json();
+      setCustomFields(data || []);
+    } catch (err) {
+      console.error("Error fetching custom fields", err);
+    }
+  };
+
+  if (effectiveUserId) fetchCustomFields();
+}, [effectiveUserId]);
+
+  // Auto-detect column mappings
+ const autoDetectColumns = (headers: string[]) => {
+  const mappings: ColumnMapping = {};
+
+  headers.forEach((header) => {
+    const lowerHeader = header.toLowerCase().trim();
+
+    if (["name", "full name", "fullname", "contact name"].includes(lowerHeader)) {
+      mappings[header] = "full_name";
+    } else if (["first name", "firstname", "first_name"].includes(lowerHeader)) {
+      mappings[header] = "first_name";
+    } else if (["last name", "lastname", "last_name"].includes(lowerHeader)) {
+      mappings[header] = "last_name";
+    } else if (lowerHeader.includes("email")) {
+      mappings[header] = "email";
+    } else if (lowerHeader.includes("company")) {
+      mappings[header] = "company";
+    } else if (lowerHeader.includes("location")) {
+      mappings[header] = "location";
+    } else if (lowerHeader.includes("website")) {
+      mappings[header] = "company_website";
+    } else if (lowerHeader.includes("job")) {
+      mappings[header] = "job_title";
+    } else if (lowerHeader.includes("linkedin")) {
+      mappings[header] = "linkedin";
+    }
+  });
+
+  const patterns: Record<string, string[]> = {
+    full_name: ['full name', 'fullname', 'contact name', 'name'],
+    email: ['email address', 'e-mail', 'mail'],
+    job_title: ['title', 'position', 'role'],
+    company: ['company name', 'organization'],
+    location: ['address', 'city', 'country'],
+    linkedin: ['linkedin url', 'linkedin profile'],
+    company_website: ['company website', 'company url']
+  };
+
+  headers.forEach((header) => {
+  const lowerHeader = header.toLowerCase();
+
+  for (const [field, patternList] of Object.entries(patterns)) {
+    if (mappings[header]) break;
+
+    const matched = patternList.some(pattern =>
+      lowerHeader.includes(pattern)
+    );
+
+    if (matched) {
+      mappings[header] = field;
+      break;
+    }
+  }
+});
+  // Detect custom fields
+  headers.forEach((header) => {
+    const lowerHeader = header.toLowerCase().trim();
+
+    const matchedCustom = customFields.find(
+      (f) => f.field_name.toLowerCase() === lowerHeader
+    );
+
+    if (matchedCustom && !mappings[header]) {
+      mappings[header] = `custom_${matchedCustom.field_name}`;
+    }
+  });
+
+  setColumnMappings(mappings);
+};
+
+
+  // const userId = sessionStorage.getItem("clientId");
+  //  console.log("Client ID stored in session:", userId);
+  // const effectiveUserId = selectedClient !== "" ? selectedClient : userId;
+  //   console.log("Client ID stored in session:", effectiveUserId);
+
+  // Handle drag events
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragIn = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragActive(true);
+    }
+  };
+
+  const handleDragOut = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      handleFileSelect(file);
+    }
+  };
+
+  // Handle file selection
+  const handleFileSelect = (file: File) => {
+    const validTypes = [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+      "text/csv",
+    ];
+
+    if (
+      !validTypes.includes(file.type) &&
+      !file.name.match(/\.(xlsx|xls|csv)$/i)
+    ) {
+      setErrors([
+        "Please upload a valid contacts data file (.xlsx, .xls, or .csv)",
+      ]);
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setErrors(["File size must be less than 10MB"]);
+      return;
+    }
+
+    setUploadedFile(file);
+    setErrors([]);
+    setDataFileInfo((prev) => ({
+      ...prev,
+      name: file.name.replace(/\.[^/.]+$/, ""), // Remove file extension
+    }));
+    readExcelFile(file);
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFileSelect(e.target.files[0]);
+    }
+  };
+
+  // Read Excel file
+  const readExcelFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        if (jsonData.length > 0) {
+          // Get headers and clean them properly
+          const rawHeaders = jsonData[0] as any[];
+          const headers = rawHeaders.map((h, index) => {
+            if (h === null || h === undefined || h === '') {
+              return `Column_${index + 1}`;
+            }
+            return String(h).trim();
+          });
+          
+          const rows = jsonData
+            .slice(1)
+            .filter((row) => (row as any[]).some((cell) => cell !== null && cell !== undefined && cell !== ''));
+
+          setColumnHeaders(headers);
+          setExcelData(rows);
+
+          // Auto-detect columns
+          autoDetectColumns(headers);
+          setCurrentStep(2);
+        } else {
+          setErrors(["The file appears to be empty"]);
+        }
+      } catch (error) {
+        setErrors([
+          "Failed to read the contacts data file. Please ensure it's a valid contacts data file.",
+        ]);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // Handle column mapping change
+  const handleMappingChange = (field: string, value: string) => {
+    setColumnMappings({
+      ...columnMappings,
+      [field]: value,
+    });
+  };
+
+  // Validate email format
+  const isValidEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  // Generate preview data
+  const generatePreview = () => {
+    const allValidData: ProcessedContact[] = [];
+    const validPreview: ProcessedContact[] = [];
+    const detailedErrors: Array<{row: number, field: string, value: string, message: string}> = [];
+    let validCount = 0;
+    let invalidCount = 0;
+
+    const totalRows = excelData.length;
+
+    excelData.forEach((row, rowIndex) => {
+      const mappedRow: any = {
+        customFields: {}
+      };
+      let isValid = true;
+
+      Object.entries(columnMappings).forEach(([column, field]) => {
+      if (!field) return;
+        const columnIndex = columnHeaders.indexOf(column);
+        
+        if (columnIndex !== -1 && columnIndex < row.length && row[columnIndex] !== undefined && row[columnIndex] !== null) {
+          const cellValue = row[columnIndex];
+          const value = cellValue?.toString().trim() || "";
+
+        if (field.startsWith("custom_")) {
+          const customKey = field.replace("custom_", "");
+          mappedRow.customFields[customKey] = value;
+        } else {
+          mappedRow[field] = value;
+        }
+        } else {
+            if (field.startsWith("custom_")) {
+              const customKey = field.replace("custom_", "");
+              mappedRow.customFields[customKey] = "";
+            } else {
+              mappedRow[field] = "";
+            }
+          }
+      });
+
+      // Handle full_name + first_name + last_name combination
+      const firstName = mappedRow.first_name || "";
+      const lastName = mappedRow.last_name || "";
+      const fullName = mappedRow.full_name || "";
+      const combinedName = fullName || `${firstName} ${lastName}`.trim();
+      mappedRow.name = combinedName;
+      if (!mappedRow.full_name && combinedName) {
+        mappedRow.full_name = combinedName;
+      }
+
+      // Validate required fields
+      if (!mappedRow.email) {
+        detailedErrors.push({
+          row: rowIndex + 2,
+          field: 'email',
+          value: mappedRow.email || '',
+          message: 'Missing required field: Email address'
+        });
+        isValid = false;
+      } else if (!isValidEmail(mappedRow.email)) {
+        detailedErrors.push({
+          row: rowIndex + 2,
+          field: 'email',
+          value: mappedRow.email,
+          message: 'Invalid email format'
+        });
+        isValid = false;
+      }
+
+      if (isValid) {
+        validCount++;
+        allValidData.push(mappedRow);
+        if (validPreview.length < 5) {
+          validPreview.push(mappedRow);
+        }
+      } else {
+        invalidCount++;
+      }
+    });
+
+    setValidationErrors(detailedErrors);
+    setPreviewData(validPreview);
+    setProcessingStats({
+      total: totalRows,
+      valid: validCount,
+      invalid: invalidCount,
+    });
+    setValidatedData(allValidData);
+
+    if (validCount === 0 && detailedErrors.length > 0) {
+      setShowValidationModal(true);
+    } else {
+      setCurrentStep(3);
+    }
+  };
+
+  // Process and save data
+  const processData = async () => {
+    if (!dataFileInfo.name.trim()) {
+      setErrors(["Please enter a data file name"]);
+      return;
+    }
+
+    const contactsToUpload = validatedData.filter(
+      (contact: any) => contact.email && isValidEmail(contact.email)
+    );
+
+    if (contactsToUpload.length === 0) {
+      setShowDataFileModal(false);
+      setErrors(["No valid contacts found. Please fix the invalid email rows before saving."]);
+      setCurrentStep(3);
+      return;
+    }
+
+    setShowDataFileModal(false);
+    setCurrentStep(4);
+    setUploadProgress(0);
+    setErrors([]);
+   // const clientId = sessionStorage.getItem("clientId"); 
+
+    try {
+      const apiPayload = {
+       // clientId: clientId,
+        clientId: Number(effectiveUserId),
+        name: dataFileInfo.name,
+        dataFileName: uploadedFile?.name || "",
+        description: dataFileInfo.description,
+          contacts: contactsToUpload.map((contact: any) => {
+            const firstName = contact.first_name?.trim() || "";
+            const lastName = contact.last_name?.trim() || "";
+            const fullName = (contact.full_name || contact.name || "").trim();
+
+            return {
+              firstName: firstName || undefined,
+              lastName: lastName || undefined,
+              fullName: fullName || undefined,
+              email: contact.email,
+              website: contact.company_website || "",
+              companyName: contact.company || "",
+              jobTitle: contact.job_title || "",
+              linkedInUrl: contact.linkedin || "",
+              countryOrAddress: contact.location || "",
+              emailSubject: contact.email_subject || "",
+              emailBody: contact.email_body || "",
+              companyTelephone: contact.company_telephone || "",
+              companyEmployeeCount: contact.company_employee_count || "",
+              companyIndustry: contact.company_industry || "",
+              companyLinkedInURL: contact.company_linkedin_url || "",
+              linkedIninformation: contact.linkedIninformation || "",
+
+              // NEW
+              customFields: contact.customFields || {}
+            };
+          })
+      };
+
+      setUploadProgress(50);
+
+      const response = await fetch(`${API_BASE_URL}/api/Crm/uploadcontacts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(apiPayload),
+      });
+
+      setUploadProgress(80);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to upload contacts");
+      }
+
+      triggerRefresh();
+
+      const result = await response.json();
+
+      setUploadProgress(100);
+
+      setProcessingStats({
+        total: excelData.length,
+        valid: result.contactCount || contactsToUpload.length,
+        invalid:
+          excelData.length - (result.contactCount || contactsToUpload.length),
+      });
+
+      onDataProcessed(contactsToUpload);
+      showImportToast(`${contactsToUpload.length} contacts imported successfully`, "success");
+    } catch (error) {
+      console.error("Error processing data:", error);
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to save data. Please try again.";
+
+      setErrors([errorMessage]);
+      showImportToast(errorMessage, "error");
+      setCurrentStep(3);
+    }
+  };
+
+  // Reset upload
+  const resetUpload = () => {
+    setCurrentStep(1);
+    setUploadedFile(null);
+    setExcelData([]);
+    setColumnHeaders([]);
+    setColumnMappings({});
+    setPreviewData([]);
+    setErrors([]);
+    setUploadProgress(0);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // Download template
+  const downloadTemplate = () => {
+    const templateData = [
+      [
+        "Name",
+        "Email",
+        "Job Title",
+        "Company",
+        "Location",
+        "LinkedIn URL",
+        "Company Website",
+        "Company Telephone",
+        "Company Employee Count",
+        "Company Industry",
+        "Company LinkedIn URL",
+        "LinkedIn Summary",
+      ],
+      [
+        "John Doe",
+        "john.doe@example.com",
+        "Software Engineer",
+        "Tech Corp",
+        "San Francisco, CA",
+        "https://linkedin.com/in/johndoe",
+        "https://techcorp.com",
+        "+1-555-123-4567",
+        "100-500",
+        "Technology",
+        "https://linkedin.com/company/techcorp",
+        "Experienced software engineer with 10+ years in full-stack development.",
+      ],
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Contacts");
+    XLSX.writeFile(wb, "contact_template.xlsx");
+  };
+  const handleButtonClick = () => {
+  setShowDataFileModal(true);
+};
+  return (
+    <div className="full-width d-flex">
+      <div className="input-section edit-section w-[100%]">
+        <div className="col-12">
+          {onBack && (
+            <div className="mb-20">
+              <button className="button secondary" onClick={onBack} style={{ borderRadius:"12px" }}>
+                ← Back to contacts
+              </button>
+            </div>
+          )}
+          <h3 className="section-title mb-20">Contacts data file upload</h3>
+
+          {/* Progress Steps */}
+          <div className="upload-steps d-flex justify-between mb-30">
+            <div className={`step-item ${currentStep >= 1 ? "active" : ""}`}>
+              <div className="step-number">1</div>
+              <div className="step-label">Upload file</div>
+            </div>
+            <div
+              className={`step-connector ${currentStep >= 2 ? "active" : ""}`}
+            ></div>
+            <div className={`step-item ${currentStep >= 2 ? "active" : ""}`}>
+              <div className="step-number">2</div>
+              <div className="step-label">Map columns</div>
+            </div>
+            <div
+              className={`step-connector ${currentStep >= 3 ? "active" : ""}`}
+            ></div>
+            <div className={`step-item ${currentStep >= 3 ? "active" : ""}`}>
+              <div className="step-number">3</div>
+              <div className="step-label">Preview & continue</div>
+            </div>
+            <div
+              className={`step-connector ${currentStep >= 4 ? "active" : ""}`}
+            ></div>
+            <div className={`step-item ${currentStep >= 4 ? "active" : ""}`}>
+              <div className="step-number">4</div>
+              <div className="step-label">Process data</div>
+            </div>
+          </div>
+
+          {/* Step 1: Upload File */}
+          {currentStep === 1 && (
+            <div className="upload-section">
+              <div className="d-flex justify-between items-center mb-10">
+                <h4 className="!mb-0">Upload your contacts data file</h4>
+                <button
+                  className="button secondary small flex items-center"
+                  style={{ borderRadius:"12px" }}
+                  onClick={downloadTemplate}
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    className="mr-5"
+                  >
+                    <path
+                      d="M12 15L12 3M12 15L8 11M12 15L16 11"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M3 17V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V17"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Download template
+                </button>
+              </div>
+
+              <div
+                className={`dropzone justify-center text-center flex flex-col items-center ${
+                  isDragActive ? "active" : ""
+                }`}
+                onDragEnter={handleDragIn}
+                onDragLeave={handleDragOut}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleFileInputChange}
+                  style={{ display: "none" }}
+                />
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M7 10L12 15L17 10"
+                    stroke="#666"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M12 15V3"
+                    stroke="#666"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M3 17V19C3 20.1046 3.89543 21 5 21H19C20.1046 21 21 20.1046 21 19V17"
+                    stroke="#666"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                <p className="mt-20 mb-10">
+                  {isDragActive
+                    ? "Drop the file here..."
+                    : "Drag & drop your contacts data file here, or click to select"}
+                </p>
+                <small className="text-muted">
+                  Supports: .xlsx, .xls, .csv (Max size: 10MB)
+                </small>
+              </div>
+
+              {uploadedFile && (
+                <div className="file-info mt-20">
+                  <p className="d-flex align-center">
+                    <svg
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="mr-10"
+                    >
+                      <path
+                        d="M14 2H6C4.89543 2 4 2.89543 4 4V20C4 21.1046 4.89543 22 6 22H18C19.1046 22 20 21.1046 20 20V8L14 2Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M14 2V8H20"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <span>{uploadedFile.name}</span>
+                    <span className="ml-10 text-muted">
+                      ({(uploadedFile.size / 1024).toFixed(2)} KB)
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              {errors.length > 0 && (
+                <div className="alert alert-error mt-20">
+                  {errors.map((error, index) => (
+                    <p key={index}>{error}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 2: Map Columns */}
+          {currentStep === 2 && (
+            <div className="mapping-section mt-20">
+              <h4
+                className="mt-[20px] sub-title"
+                style={{ marginBottom: "5px" }}
+              >
+                Map your contacts data file columns
+              </h4>
+              <p className="text-muted mb-20">
+                Please map your contacts data file to the fields in the pick lists below.<br />
+                Mandatory fields are 'Email address' and 'Full name'. Important, but not mandatory fields are 'Company name', 'Job title'.
+              </p>
+
+<div className="mapping-container">
+  {columnHeaders.map((header) => (
+    <div key={header} className="form-group">
+      <label>{header}</label>
+
+      <select
+        value={columnMappings[header] || ""}
+        onChange={(e) =>
+          setColumnMappings({
+            ...columnMappings,
+            [header]: e.target.value,
+          })
+        }
+      >
+        <option value="">--Do not include--</option>
+
+        {allFields
+          .filter(
+            (field) =>
+              !Object.values(columnMappings).includes(field.key) ||
+              columnMappings[header] === field.key
+          )
+          .map((field) => {
+            // Custom label mapping for specific fields
+            let displayLabel;
+            if (field.key === 'company') {
+              displayLabel = 'Company name';
+            } else if (field.key === 'location') {
+              displayLabel = 'Company location';
+            } else {
+              // Use sentence casing: capitalize only the first letter
+              displayLabel = field.key
+                .replace(/_/g, " ")
+                .toLowerCase()
+                .replace(/^\w/, (c) => c.toUpperCase());
+            }
+            
+            return (
+              <option key={field.key} value={field.key}>
+                {displayLabel}
+              </option>
+            );
+          })}
+      </select>
+    </div>
+  ))}
+</div>
+
+              <div
+                className="
+              flex justify-end gap-2"
+              >
+                <button onClick={resetUpload} className="button secondary"style={{ borderRadius:"12px" }}>
+                  Back
+                </button>
+                <button
+                  onClick={generatePreview}
+                  className="button action-button"
+                  style={{ borderRadius:"12px" }}
+                  disabled={
+                    !Object.values(columnMappings).includes("email") ||
+                    !(Object.values(columnMappings).includes("first_name") ||
+                      Object.values(columnMappings).includes("full_name"))
+                  }
+                >
+                  Continue to preview
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Preview */}
+          {currentStep === 3 && (
+            <div className="preview-section">
+              <div className="d-flex justify-between align-center mb-20">
+                <h4 style={{ marginBottom: 0 }}>Preview Your Data</h4>
+                <div className="stats-info">
+                  <span className="badge badge-info">
+                    Total: {processingStats.total}
+                  </span>
+                  <span className="badge badge-success ml-10">
+                    Valid: {processingStats.valid}
+                  </span>
+                  {processingStats.invalid > 0 && (
+                    <span className="badge badge-error ml-10">
+                      Invalid: {processingStats.invalid}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="text-muted mb-20">
+                Please review the first 5 rows of your mapped data:
+              </p>
+
+              {errors.length > 0 && (
+                <div className="alert alert-error mt-20 mb-20">
+                  {errors.map((error, index) => (
+                    <p key={index}>{error}</p>
+                  ))}
+                </div>
+              )}
+
+              <div className="table-container">
+                <table className="preview-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Job title</th>
+                      <th>Company</th>
+                      <th>Location</th>
+                      <th>LinkedIn</th>
+                      <th>Website</th>
+                      <th>Phone</th>
+                      <th>Industry</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewData.map((row, index) => (
+                      <tr key={index}>
+                        <td>{row.name || "-"}</td>
+                        <td>{row.email || "-"}</td>
+                        <td>{row.job_title || "-"}</td>
+                        <td>{row.company || "-"}</td>
+                        <td>{row.location || "-"}</td>
+                        <td>{row.linkedin || "-"}</td>
+                        <td>{row.company_website || "-"}</td>
+                        <td>{row.company_telephone || "-"}</td>
+                        <td>{row.company_industry || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {validationErrors.length > 0 && (
+                <div className="alert alert-warning mt-20">
+                  <h5>Data Quality Summary:</h5>
+                  <p>{validationErrors.length} issue{validationErrors.length > 1 ? 's' : ''} found in your data. 
+                     Only valid rows will be processed during import.</p>
+                  <button 
+                    onClick={() => setShowValidationModal(true)}
+                    style={{
+                      background: '#ffc107',
+                      color: '#000',
+                      border: 'none',
+                      padding: '6px 12px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      marginTop: '8px'
+                    }}
+                  >
+                    View Details
+                  </button>
+                </div>
+              )}
+
+              <div className="button-group mt-30">
+                <button
+                  onClick={() => setCurrentStep(2)}
+                  style={{ borderRadius:"12px" }}
+                  className="button secondary"
+                >
+                  Back to mapping
+                </button>
+                <button
+                  //onClick={() => {console.log("Process & Save Data button clicked!");setShowDataFileModal(true)}}
+                  onClick={handleButtonClick}
+                  style={{ borderRadius:"12px" }}
+                  className="button action-button"
+                  disabled={isProcessing || processingStats.valid === 0}
+                >
+                  {isProcessing ? "Processing..." : "Process & save data"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Complete */}
+          {currentStep === 4 && (
+            <div className="complete-section text-center">
+              {uploadProgress < 100 ? (
+                <>
+                  <div className="progress-container mb-20">
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{ width: `${uploadProgress}%` }}
+                      ></div>
+                    </div>
+                    <p className="mt-10">Processing... {uploadProgress}%</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="success-icon mb-20"
+                    width="64"
+                    height="64"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <path
+                      d="M20 6L9 17L4 12"
+                      stroke="#4CAF50"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="#4CAF50"
+                      strokeWidth="2"
+                    />
+                  </svg>
+                  <h3 className="mb-10">Upload Complete!</h3>
+                  <p className="text-muted mb-10">
+                    Your contacts have been successfully imported.
+                  </p>
+                  <div className="stats-summary mb-30">
+                    <p className="text-large">
+                      {processingStats.valid} records processed successfully
+                    </p>
+                    {processingStats.invalid > 0 && (
+                      <p className="text-error">
+                        {processingStats.invalid} records skipped due to errors
+                      </p>
+                    )}
+                  </div>
+                  <div className="button-group">
+                    <button onClick={resetUpload} className="button secondary">
+                      Upload Another File
+                    </button>
+                    <button
+                      className="button action-button"
+                      onClick={() => {
+                        // Navigate to email generation or close the upload section
+                        resetUpload();
+                      }}
+                    >
+                      Continue to email generation
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <style>{toastAnimation}</style>
+
+      {showSuccessToast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#E6F4EF",
+            color: "#2F3A34",
+            padding: "14px 22px",
+            borderRadius: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
+            zIndex: 99999,
+            minWidth: 420,
+            fontSize: 16,
+            fontWeight: 500,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              height: 4,
+              width: "100%",
+              background: "#1F9D74",
+              animation: "toastProgress 3s linear forwards",
+            }}
+          />
+
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "#1F9D74",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}
+          >
+            {"\u2713"}
+          </div>
+
+          <div style={{ flex: 1 }}>{toastMessage}</div>
+
+          <div
+            onClick={() => setShowSuccessToast(false)}
+            style={{
+              cursor: "pointer",
+              fontSize: 30,
+              fontWeight: 500,
+              color: "#6B7280",
+              lineHeight: 1,
+            }}
+          >
+            {"\u00d7"}
+          </div>
+        </div>
+      )}
+
+      {showErrorToast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#FDECEC",
+            color: "#2F3A34",
+            padding: "14px 22px",
+            borderRadius: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
+            zIndex: 99999,
+            minWidth: 420,
+            fontSize: 16,
+            fontWeight: 500,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              height: 4,
+              width: "100%",
+              background: "#DC2626",
+              animation: "toastProgress 3s linear forwards",
+            }}
+          />
+
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "#DC2626",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}
+          >
+            !
+          </div>
+
+          <div style={{ flex: 1 }}>{toastMessage}</div>
+
+          <div
+            onClick={() => setShowErrorToast(false)}
+            style={{
+              cursor: "pointer",
+              fontSize: 30,
+              fontWeight: 500,
+              color: "#9CA3AF",
+              lineHeight: 1,
+            }}
+          >
+            {"\u00d7"}
+          </div>
+        </div>
+      )}
+
+      {/* Data File Info Modal */}
+      <Modal
+        show={showDataFileModal}
+        closeModal={() => setShowDataFileModal(false)}
+        buttonLabel=""
+        size="auto-width"
+      >
+        {/* <div className="datafile-modal" > */}
+          <h2  style={{
+          fontSize: "20px",
+          fontWeight: "600",
+          marginBottom: "24px",
+          color: "#222",
+        }}>Enter data file information</h2>
+          <div className="form-group">
+            <label>
+              Data file name <span className="required">*</span>
+            </label>
+            <input
+              type="text"
+              value={dataFileInfo.name}
+              onChange={(e) =>
+                setDataFileInfo((prev) => ({ ...prev, name: e.target.value }))
+              }
+              placeholder="Enter data file name"
+            />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea
+              value={dataFileInfo.description}
+              onChange={(e) =>
+                setDataFileInfo((prev) => ({
+                  ...prev,
+                  description: e.target.value,
+                }))
+              }
+              placeholder="Enter description (optional)"
+              rows={4}
+            />
+          </div>
+          <div className="button-group">
+            <button
+              className="button secondary"
+              onClick={() => setShowDataFileModal(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="button action-button"
+              onClick={processData}
+              disabled={!dataFileInfo.name.trim()}
+            >
+              Save data
+            </button>
+          </div>
+        {/* </div> */}
+      </Modal>
+
+      {/* Validation Error Modal */}
+      <ValidationErrorModal
+        isOpen={showValidationModal}
+        onClose={() => setShowValidationModal(false)}
+        errors={validationErrors}
+        onContinue={() => {
+          setShowValidationModal(false);
+          setCurrentStep(3);
+        }}
+        onFixErrors={() => {
+          setShowValidationModal(false);
+          setCurrentStep(2);
+        }}
+      />
+    </div>
+  );
+};
+
+export default DataFile;

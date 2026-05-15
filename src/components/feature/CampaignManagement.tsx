@@ -1,0 +1,1140 @@
+import React, { useState, useEffect } from "react";
+import API_BASE_URL from "../../config";
+import { useDispatch, useSelector } from "react-redux";
+import { RootState } from "../../Redux/store";
+import { useAppData } from "../../contexts/AppDataContext";
+import AppModal from "../common/AppModal";
+import { useAppModal } from "../../hooks/useAppModal";
+import PaginationControls from "./PaginationControls";
+import { ToastContainer, toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import CommonSidePanel from "../common/CommonSidePanel";
+import deleteIcon from "../../assets/images/deleteiconn.png";
+import { faEdit,faTrashAlt,faCircleXmark ,faFileLines   } from "@fortawesome/free-regular-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { closePanel, openPanel } from "../../slices/panelSlice";
+
+interface CampaignManagementProps {
+  selectedClient: string;
+  userRole?: string;
+}
+
+interface Segment {
+  id: number;
+  name: string;
+  description: string;
+  dataFileId: number;
+  clientId: number;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+interface ViewOption {
+  id: number;
+  name: string;
+  description?: string;
+}
+
+interface Prompt {
+  id: number;
+  name: string;
+  text: string;
+}
+
+interface Campaign {
+  id: number;
+  campaignName: string;
+  promptId: number;
+  clientId: number;
+  description?: string;
+  createdAt?: string;
+  created_at?: string;
+  CreatedAt?: string;
+  templateId?: number; // campaign blueprint ID
+  segmentId?: number | null;
+  zohoViewId?: string | null;
+  segmentName?: string | null;
+  dataFileName?: string | null;
+  dataSource?: string;
+}
+
+interface DataFile {
+  id: number;
+  client_id: number;
+  name: string;
+}
+
+interface CampaignBlueprint {
+  id: number;
+  templateName: string;
+  campaignBlueprint: string;
+  selectedModel?: string;
+}
+
+const CampaignManagement: React.FC<CampaignManagementProps> = ({
+  selectedClient,
+}) => {
+  const dispatch = useDispatch();
+  const [isLoading, setIsLoading] = useState(false);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [dataFiles, setDataFiles] = useState<DataFile[]>([]);
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [views, setViews] = useState<ViewOption[]>([]);
+  const [promptList, setPromptList] = useState<Prompt[]>([]);
+  const [campaignBlueprints, setCampaignBlueprints] = useState<CampaignBlueprint[]>([]);
+  const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+  const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
+  // const [showCreateCampaignModal, setShowCreateCampaignModal] = useState(false);
+  const [campaignSearch, setCampaignSearch] = useState("");
+  const [campaignActionsAnchor, setCampaignActionsAnchor] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [listSortKey, setListSortKey] = useState<string>("campaignName");
+  const [listSortDirection, setListSortDirection] = useState<"asc" | "desc">("asc");
+  const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [showErrorToast, setShowErrorToast] = useState(false);
+
+  const activePanel = useSelector(
+    (state: RootState) => state.panel.activePanel
+  );
+
+  const showCreateCampaignModal =
+    activePanel === "campaign-create";
+
+
+  const appModal = useAppModal();
+  const { refreshTrigger, triggerRefresh } = useAppData();
+
+  const reduxUserId = useSelector((state: RootState) => state.auth.userId);
+  const effectiveUserId = selectedClient !== "" ? selectedClient : reduxUserId;
+
+  const [campaignForm, setCampaignForm] = useState({
+    campaignName: "",
+    promptId: "",
+    zohoViewId: "",
+    segmentId: "",
+    description: "",
+    templateId: "", // campaign blueprint id
+  });
+ const toastAnimation = `
+@keyframes toastProgress {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+`;
+  // ================== FETCH FUNCTIONS ==================
+  const compareStrings = (a?: string, b?: string, direction: "asc" | "desc" = "asc") => {
+    const valueA = (a || "").toLowerCase();
+    const valueB = (b || "").toLowerCase();
+
+    if (valueA < valueB) return direction === "asc" ? -1 : 1;
+    if (valueA > valueB) return direction === "asc" ? 1 : -1;
+    return 0;
+  };
+  const getCampaignCreatedAt = (campaign: Campaign) =>
+    campaign.createdAt || campaign.created_at || campaign.CreatedAt || "";
+
+  const formatDate = (dateString?: string | null) => {
+    if (!dateString) return "-";
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return "-";
+
+    return date.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const handleListSort = (key: string) => {
+    if (listSortKey === key) {
+      setListSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setListSortKey(key);
+      setListSortDirection("asc");
+    }
+  };
+  const fetchCampaigns = async () => {
+    if (!effectiveUserId) return;
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/campaigns/client/${effectiveUserId}`);
+      const data: Campaign[] = await res.json();
+      const enrichedCampaigns = await Promise.all(
+        data.map(async (c) => {
+          try {
+            const detailRes = await fetch(
+              `${API_BASE_URL}/api/auth/campaigns/${c.id}`
+            );
+            const detail = await detailRes.json();
+            return {
+              ...c,
+              ...detail,
+            };
+          } catch {
+            return c;
+          }
+        })
+      );
+      setCampaigns(enrichedCampaigns);
+      // setCampaigns(data);
+    } catch (err) {
+      console.error("Error fetching campaigns:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchDataFiles = async () => {
+    if (!effectiveUserId) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/crm/datafile-byclientid?clientId=${effectiveUserId}`);
+      const data: DataFile[] = await res.json();
+      setDataFiles(data.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+    } catch (err) {
+      console.error("Error fetching data files:", err);
+    }
+  };
+
+  const fetchSegments = async () => {
+    if (!effectiveUserId) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/Crm/get-segments-by-client?clientId=${effectiveUserId}`);
+      const data: Segment[] = await res.json();
+      setSegments(data.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+    } catch (err) {
+      console.error("Error fetching segments:", err);
+    }
+  };
+
+  const fetchViews = async () => {
+    if (!effectiveUserId) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/Crm/views-by-client?clientId=${effectiveUserId}`
+      );
+      const data: ViewOption[] = await res.json();
+      setViews(
+        data.sort((a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+        )
+      );
+    } catch (err) {
+      console.error("Error fetching views:", err);
+    }
+  };
+
+  const fetchPromptsList = async () => {
+    if (!effectiveUserId) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/getprompts/${effectiveUserId}`);
+      const data: Prompt[] = await res.json();
+      setPromptList(data);
+    } catch (err) {
+      console.error("Error fetching prompts:", err);
+    }
+  };
+
+  const fetchCampaignBlueprints = async () => {
+    if (!effectiveUserId) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/CampaignPrompt/templates/${effectiveUserId}`);
+      const data = await res.json();
+      const templates = data.templates || [];
+      setCampaignBlueprints(templates.sort((a: CampaignBlueprint, b: CampaignBlueprint) => 
+        a.templateName.toLowerCase().localeCompare(b.templateName.toLowerCase())
+      ));
+    } catch (err) {
+      console.error("Error fetching campaign blueprints:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (effectiveUserId) {
+      fetchCampaigns();
+      fetchDataFiles();
+      fetchSegments();
+      fetchViews();
+      fetchPromptsList();
+      fetchCampaignBlueprints();
+    }
+  }, [effectiveUserId, refreshTrigger]);
+
+  // ================== HANDLERS ==================
+
+  const handlePromptSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const promptId = e.target.value;
+    const prompt = promptList.find((p) => p.id.toString() === promptId);
+    setSelectedPrompt(prompt || null);
+    setCampaignForm((prev) => ({ ...prev, promptId }));
+  };
+
+  const handleDataSourceChange = (
+    type: "datafile" | "segment" | "view",
+    value: string
+  ) => {
+    setCampaignForm((prev) => ({
+      ...prev,
+      zohoViewId:
+        type === "datafile" ? value : type === "view" ? `view_${value}` : "",
+      segmentId: type === "segment" ? value : "",
+    }));
+  };
+
+  const handleCampaignSelect = async (campaignId: string) => {
+    const campaign = campaigns.find((c) => c.id.toString() === campaignId);
+    if (!campaign) return;
+
+    setSelectedCampaign(campaign);
+    setCampaignForm({
+      campaignName: campaign.campaignName,
+      promptId: campaign.promptId?.toString() || "",
+      zohoViewId: campaign.zohoViewId || "",
+      segmentId: campaign.segmentId?.toString() || "",
+      description: campaign.description || "",
+      templateId: campaign.templateId?.toString() || "",
+    });
+
+    // ✅ Load blueprint data for the selected campaign
+    if (campaign.templateId) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/CampaignPrompt/campaign/${campaign.templateId}`);
+        const data = await res.json();
+        saveCampaignBlueprint(data);
+      } catch (error) {
+        console.error("Error fetching campaign blueprint:", error);
+      }
+    }
+  };
+
+
+  const handleCampaignFormChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+  ) => {
+    const { name, value } = e.target;
+    setCampaignForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+
+  // ✅ Helper: Save campaign blueprint to sessionStorage and context
+  const saveCampaignBlueprint = (blueprintData: any) => {
+    if (!blueprintData) return;
+
+    const promptPayload = {
+      id: blueprintData.id || "campaign-blueprint",
+      name: blueprintData.templateName || "Campaign Blueprint",
+      text: blueprintData.campaignBlueprint || "",
+      model: blueprintData.selectedModel || "gpt-5",
+    };
+
+    // ✅ Store in sessionStorage for MainPage.tsx
+    sessionStorage.setItem("selectedPrompt", JSON.stringify(promptPayload));
+    sessionStorage.setItem("selectedCampaignId", blueprintData.id);
+
+    // ✅ Optional: update context/local state
+    setSelectedPrompt(promptPayload);
+  };
+
+
+  const createCampaign = async () => {
+    if (!campaignForm.campaignName || !effectiveUserId) {
+     // appModal.showError("Please fill all required fields.");
+       setToastMessage("Please fill all required fields.");
+      setShowErrorToast(true);
+      setTimeout(() => setShowErrorToast(false), 6000);
+      return;
+    }
+
+    const requestBody = {
+      campaignName: campaignForm.campaignName,
+      promptId: campaignForm.promptId ? parseInt(campaignForm.promptId) : null,
+      clientId: typeof effectiveUserId === "string" ? parseInt(effectiveUserId) : effectiveUserId,
+      templateId: campaignForm.templateId ? parseInt(campaignForm.templateId) : null,
+      description: campaignForm.description,
+      segmentId: campaignForm.segmentId ? parseInt(campaignForm.segmentId) : null,
+      zohoViewId: campaignForm.zohoViewId || null,
+    };
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/campaigns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      const resBody = await res.json();
+      console.log("resBody", resBody);
+      if (!res.ok) throw new Error(resBody.message || JSON.stringify(resBody));
+
+      // ✅ Store the blueprint (prompt) returned by backend
+      if (resBody.campaignBlueprint) {
+        saveCampaignBlueprint({
+          id: resBody.templateId,
+          templateName: campaignBlueprints.find((bp) => bp.id === resBody.templateId)?.templateName,
+          campaignBlueprint: resBody.campaignBlueprint,
+          selectedModel: "gpt-5",
+        });
+      }
+
+      // appModal.showSuccess("Campaign created successfully");
+
+      setToastMessage("The Campaign has been created");
+      setShowSuccessToast(true);
+      setTimeout(() => setShowSuccessToast(false), 6000);
+
+      //setShowCreateCampaignModal(false);
+      dispatch(closePanel());
+      fetchCampaigns();
+      triggerRefresh(); // Notify other components to refresh their campaign data
+    } catch (err: any) {
+      console.error(err);
+     // appModal.showError(err.message || "Failed to create campaign");
+      setToastMessage("Failed to create campaign");
+      setShowErrorToast(true);
+      setTimeout(() => setShowErrorToast(false), 6000);
+    }
+  };
+
+
+
+  const updateCampaign = async () => {
+    if (!selectedCampaign) return;
+    const requestBody = {
+      id: selectedCampaign.id,
+      campaignName: campaignForm.campaignName,
+      promptId: parseInt(campaignForm.promptId),
+      zohoViewId: campaignForm.zohoViewId || null,
+      segmentId: campaignForm.segmentId ? parseInt(campaignForm.segmentId) : null,
+      description: campaignForm.description,
+      templateId: campaignForm.templateId ? parseInt(campaignForm.templateId) : null,
+    };
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/updatecampaign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      if (!res.ok) throw new Error("Failed to update campaign");
+      // appModal.showSuccess("Campaign updated successfully");
+      setToastMessage("Campaign updated successfully");
+      setShowSuccessToast(true);
+      setTimeout(() => setShowSuccessToast(false), 6000);
+      //setShowCreateCampaignModal(false);
+      dispatch(closePanel());
+
+      fetchCampaigns();
+      triggerRefresh(); // Notify other components to refresh their campaign data
+    } catch (err) {
+      console.error(err);
+     // appModal.showError("Failed to update campaign");
+      setToastMessage("Failed to update campaign");
+      setShowErrorToast(true);
+      setTimeout(() => setShowErrorToast(false), 6000);
+    }
+  };
+
+  const deleteCampaign = async (campaign: Campaign) => {
+    try {
+      await fetch(`${API_BASE_URL}/api/auth/deletecampaign/${campaign.id}`, { method: "POST" });
+      // appModal.showSuccess("Campaign deleted successfully");
+      setToastMessage("Campaign deleted successfully");
+      setShowSuccessToast(true);
+      setTimeout(() => setShowSuccessToast(false), 6000);
+      fetchCampaigns();
+      triggerRefresh(); // Notify other components to refresh their campaign data
+    } catch (err) {
+      console.error(err);
+     // appModal.showError("Failed to delete campaign");
+      setToastMessage("Failed to delete campaign");
+      setShowErrorToast(true);
+      setTimeout(() => setShowErrorToast(false), 6000);
+    }
+  };
+  useEffect(() => {
+    const fetchCampaigns = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/campaigns/client/${effectiveUserId}`);
+        const data = await response.json();
+        console.log("Alltemplateid", data)
+        setCampaigns(data);
+        // setCampaigns(data.campaigns || []);
+      } catch (err) {
+        console.error("Error fetching campaigns", err);
+      }
+    };
+    fetchCampaigns();
+  }, []);
+
+  // ================== UI RENDER ==================
+
+  //const pageSize = 5;
+  const [pageSize, setPageSize] = useState<number | "All">(10);
+  // const filteredCampaigns = campaigns.filter((c) =>
+  //   c.campaignName.toLowerCase().includes(campaignSearch.toLowerCase())
+  // );
+  const filteredCampaigns = campaigns
+    .filter((c) =>
+      c.campaignName.toLowerCase().includes(campaignSearch.toLowerCase())
+    )
+    .sort((a, b) => {
+      switch (listSortKey) {
+        case "campaignName":
+          return compareStrings(a.campaignName, b.campaignName, listSortDirection);
+
+        case "templateName":
+          return compareStrings(
+            campaignBlueprints.find(bp => bp.id === a.templateId)?.templateName,
+            campaignBlueprints.find(bp => bp.id === b.templateId)?.templateName,
+            listSortDirection
+          );
+
+        case "description":
+          return compareStrings(a.description, b.description, listSortDirection);
+
+        case "createdAt":
+          const dateA = new Date(getCampaignCreatedAt(a)).getTime();
+          const dateB = new Date(getCampaignCreatedAt(b)).getTime();
+          const safeDateA = Number.isNaN(dateA) ? 0 : dateA;
+          const safeDateB = Number.isNaN(dateB) ? 0 : dateB;
+          return listSortDirection === "asc"
+            ? safeDateA - safeDateB
+            : safeDateB - safeDateA;
+
+        default:
+          return 0;
+      }
+    });
+
+  const totalPages = pageSize === "All"
+    ? 1
+    : Math.ceil(filteredCampaigns.length / pageSize);
+  const paginatedCampaigns = pageSize === "All"
+    ? filteredCampaigns
+    : filteredCampaigns.slice(
+      (currentPage - 1) * pageSize,
+      currentPage * pageSize
+    );
+  const menuBtnStyle = {
+    width: "100%",
+    padding: "8px 18px",
+    textAlign: "left",
+    background: "none",
+    border: "none",
+    color: "#222",
+    fontSize: "15px",
+    cursor: "pointer",
+  } as React.CSSProperties;
+  const actionIconStyle = {
+  width: 24,
+  height: 24,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+};
+  const renderSortArrow = (columnKey: string, currentSortKey: string, sortDirection: string) => {
+    if (columnKey === currentSortKey) {
+      return sortDirection === "asc" ? " ▲" : " ▼"
+    }
+    return ""
+  }
+  return (
+    <div className="data-campaigns-container">
+      <div className="section-wrapper">
+        <h2 className="section-title">Campaigns</h2>
+        <p style={{ marginBottom: '10px' }}>Create and manage campaigns quickly and efficiently.</p>
+
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 16 }}>
+          <input
+            type="text"
+            placeholder="Search campaigns..."
+            value={campaignSearch}
+            onChange={(e) => setCampaignSearch(e.target.value)}
+            className="search-input"
+            style={{ width: 340 }}
+          />
+          <button
+            className="save-button button small"
+            style={{ marginLeft: "auto", borderRadius:"12px"}}
+            onClick={() => {
+              fetchViews();
+              //setShowCreateCampaignModal(true);
+              dispatch(openPanel("campaign-create"));
+              setSelectedCampaign(null);
+              setCampaignForm({
+                campaignName: "",
+                promptId: "",
+                zohoViewId: "",
+                segmentId: "",
+                description: "",
+                templateId: "",
+              });
+            }}
+          >
+            + Create campaign
+          </button>
+        </div>
+        <div style={{ marginBottom: "10px" }}>
+          <PaginationControls
+            currentPage={currentPage}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalRecords={filteredCampaigns.length}
+            setCurrentPage={setCurrentPage}
+            setPageSize={setPageSize}
+            showPageSizeDropdown={true}
+            pageLabel="Page:"
+          />
+        </div>
+
+        <table className="contacts-table" style={{ background: "#fff" }}>
+          <thead>
+            <tr>
+              <th onClick={() => handleListSort("campaignName")} style={{ cursor: "pointer" }}>Campaign name{renderSortArrow("campaignName", listSortKey, listSortDirection)}</th>
+              <th onClick={() => handleListSort("templateName")} style={{ cursor: "pointer" }}>Blueprint{renderSortArrow("templateName", listSortKey, listSortDirection)}</th>
+              <th onClick={() => handleListSort("description")} style={{ cursor: "pointer" }}>Data source</th>
+              <th onClick={() => handleListSort("description")} style={{ cursor: "pointer" }}>Description{renderSortArrow("description", listSortKey, listSortDirection)}</th>
+              <th onClick={() => handleListSort("createdAt")} style={{ cursor: "pointer" }}>Creation date{renderSortArrow("createdAt", listSortKey, listSortDirection)}</th>
+              <th onClick={() => handleListSort("name")} style={{ cursor: "pointer" }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              <tr><td colSpan={6}>Loading...</td></tr>
+            ) : paginatedCampaigns.length === 0 ? (
+              <tr><td colSpan={6}>No campaigns found.</td></tr>
+            ) : (
+              paginatedCampaigns.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.campaignName}</td>
+                  <td>
+                    {c.templateId
+                      ? campaignBlueprints.find(bp => bp.id === c.templateId)?.templateName || "-"
+                      : "-"}
+                  </td>
+
+                  <td>
+                    {typeof c.zohoViewId === "string" &&
+                    c.zohoViewId.startsWith("view_")
+                      ? views.find(
+                          (v) => v.id.toString() === (c.zohoViewId as string).replace("view_", "")
+                        )?.name || "View"
+                      : c.dataSource === "Segment" && c.segmentName
+                      ? c.segmentName
+                      : c.dataSource === "DataFile" && c.dataFileName
+                      ? c.dataFileName
+                      : c.zohoViewId
+                      ? "List"
+                      : c.segmentId
+                      ? "Segment"
+                      : "-"}
+                  </td>
+                  <td>{c.description || "-"}</td>
+                  <td>{formatDate(getCampaignCreatedAt(c))}</td>
+                  <td style={{ position: "relative" }}>
+                    <button
+                      onClick={() =>
+                        setCampaignActionsAnchor(
+                          campaignActionsAnchor === c.id ? null : c.id
+                        )
+                      }
+                      style={{
+                        padding: "4px 10px",
+                        borderRadius: "5px",
+                        fontSize: "20px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      ⋮
+                    </button>
+
+                    {campaignActionsAnchor === c.id && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "30px",
+                          right: 0,
+                           background: "#fff",
+                          border: "1px solid #eee",
+                          borderRadius: "6px",
+                          boxShadow: "0px 4px 12px rgba(0,0,0,0.15)",
+                          zIndex: 100,
+                          padding: "8px 0",
+                          width: "120px",
+                        }}
+                      >
+
+
+                        <button
+                          onClick={() => {
+                            handleCampaignSelect(c.id.toString());
+                            //setShowCreateCampaignModal(true);
+                            dispatch(openPanel("campaign-create"));
+                            setCampaignActionsAnchor(null);
+                          }}
+                          style={{ ...menuBtnStyle, fontSize: '15px', fontWeight: 600 }}
+                          className="flex gap-2 items-center"
+                        >
+                          {/* <span>
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="28px"
+                              height="28px"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <path
+                                d="M12 3.99997H6C4.89543 3.99997 4 4.8954 4 5.99997V18C4 19.1045 4.89543 20 6 20H18C19.1046 20 20 19.1045 20 18V12M18.4142 8.41417L19.5 7.32842C20.281 6.54737 20.281 5.28104 19.5 4.5C18.7189 3.71895 17.4526 3.71895 16.6715 4.50001L15.5858 5.58575M18.4142 8.41417L12.3779 14.4505C12.0987 14.7297 11.7431 14.9201 11.356 14.9975L8.41422 15.5858L9.00257 12.6441C9.08001 12.2569 9.27032 11.9013 9.54951 11.6221L15.5858 5.58575M18.4142 8.41417L15.5858 5.58575"
+                                stroke="#3f9f42"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              ></path>
+                            </svg>
+                          </span> Edit */}
+                          <span style={actionIconStyle}>
+                            <FontAwesomeIcon
+                            icon={faEdit}
+                            style={{ color: "#3f9f42", fontSize: 20 }}
+                            />
+                          </span>
+                           <span> Edit</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            deleteCampaign(c);
+                            setCampaignActionsAnchor(null);
+                          }}
+                          style={{ ...menuBtnStyle, fontSize: '15px', fontWeight: 600 }}
+                          className="flex gap-2 items-center"
+                        >
+                          <span style={actionIconStyle}>
+                           <FontAwesomeIcon
+                            icon={faTrashAlt}
+                            style={{ color: "#3f9f42", fontSize: 20 }}
+                            />
+                            </span>
+                            <span> Delete</span> 
+                        </button>
+                      </div>
+                    )}
+                  </td>
+
+                  {/* <td>
+                    <button onClick={() => handleCampaignSelect(c.id.toString())}>Edit</button>
+                    <button onClick={() => deleteCampaign(c)}>Delete</button>
+                  </td> */}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          totalRecords={filteredCampaigns.length}
+          setCurrentPage={setCurrentPage}
+          setPageSize={setPageSize}
+          showPageSizeDropdown={true}
+          pageLabel="Page:"
+        />
+      </div>
+      <ToastContainer />
+      <CommonSidePanel
+        isOpen={showCreateCampaignModal}
+        onClose={() => {
+          //setShowCreateCampaignModal(false);
+          dispatch(closePanel());
+          setSelectedCampaign(null);
+          setCampaignForm({
+            campaignName: "",
+            promptId: "",
+            zohoViewId: "",
+            segmentId: "",
+            description: "",
+            templateId: "",
+          });
+          setSelectedPrompt(null);
+        }}
+        title={selectedCampaign ? "Edit campaign" : "Create campaign"}
+        footerContent={
+          <>
+            <button
+              onClick={() => 
+                {
+                  //setShowCreateCampaignModal(false)
+                  dispatch(closePanel());
+                }
+
+              }
+              style={{
+                padding: "10px 32px",
+                border: "1px solid #ddd",
+                background: "#fff",
+                borderRadius: "24px",
+                cursor: "pointer",
+                fontSize: "14px",
+                fontWeight: "500",
+                color: "#333",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={selectedCampaign ? updateCampaign : createCampaign}
+              disabled={
+                isLoading ||
+                !campaignForm.campaignName ||
+                !campaignForm.templateId ||
+                (!campaignForm.zohoViewId && !campaignForm.segmentId)
+              }
+              style={{
+                padding: "10px 32px",
+                background: "#fff",
+                color:
+                  !isLoading &&
+                  campaignForm.campaignName &&
+                  campaignForm.templateId &&
+                  (campaignForm.zohoViewId || campaignForm.segmentId)
+                    ? "#ef4444"
+                    : "#ccc",
+                border: `1px solid ${
+                  !isLoading &&
+                  campaignForm.campaignName &&
+                  campaignForm.templateId &&
+                  (campaignForm.zohoViewId || campaignForm.segmentId)
+                    ? "#ef4444"
+                    : "#ccc"
+                }`,
+                borderRadius: "24px",
+                cursor:
+                  !isLoading &&
+                  campaignForm.campaignName &&
+                  campaignForm.templateId &&
+                  (campaignForm.zohoViewId || campaignForm.segmentId)
+                    ? "pointer"
+                    : "not-allowed",
+                fontSize: "14px",
+                fontWeight: "500",
+              }}
+            >
+              {isLoading
+                ? selectedCampaign
+                  ? "Updating..."
+                  : "Creating..."
+                : selectedCampaign
+                  ? "Update"
+                  : "Create"}
+            </button>
+          </>
+        }
+      >
+        {/* Campaign Name */}
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ fontWeight: 500, display: "block", marginBottom: "4px" }}>
+            Campaign name <span style={{ color: "red" }}>*</span>
+          </label>
+          <input
+            type="text"
+            name="campaignName"
+            value={campaignForm.campaignName}
+            onChange={handleCampaignFormChange}
+            placeholder="Enter campaign name"
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "4px",
+              border: "1px solid #ddd",
+              fontSize: "14px",
+            }}
+          />
+        </div>
+
+        {/* Blueprint Dropdown */}
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ fontWeight: 500, display: "block", marginBottom: "4px" }}>
+            Blueprint <span style={{ color: "red" }}>*</span>
+          </label>
+          <select
+            value={campaignForm.templateId}
+            onChange={(e) =>
+              setCampaignForm((prev) => ({
+                ...prev,
+                templateId: e.target.value,
+              }))
+            }
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "4px",
+              border: "1px solid #ddd",
+              fontSize: "14px",
+            }}
+          >
+            <option value="">Select Blueprint</option>
+            {[...campaignBlueprints]
+              .sort((a, b) => a.templateName.toLowerCase().localeCompare(b.templateName.toLowerCase()))
+              .map((bp) => (
+                <option key={bp.id} value={bp.id}>
+                  {bp.templateName}
+                </option>
+              ))}
+          </select>
+        </div>
+
+        {/* List/Segment/View */}
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ fontWeight: 500, display: "block", marginBottom: "4px" }}>
+            List/segment/view <span style={{ color: "red" }}>*</span>
+          </label>
+          <select
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value.startsWith("list-")) {
+                handleDataSourceChange("datafile", value.replace("list-", ""));
+              } else if (value.startsWith("segment-")) {
+                handleDataSourceChange("segment", value.replace("segment-", ""));
+              } else if (value.startsWith("view-")) {
+                handleDataSourceChange("view", value.replace("view-", ""));
+              } else {
+                setCampaignForm((prev) => ({
+                  ...prev,
+                  zohoViewId: "",
+                  segmentId: "",
+                }));
+              }
+            }}
+            value={
+              campaignForm.segmentId
+                ? `segment-${campaignForm.segmentId}`
+                : campaignForm.zohoViewId?.startsWith("view_")
+                ? `view-${campaignForm.zohoViewId.replace("view_", "")}`
+                : campaignForm.zohoViewId
+                ? `list-${campaignForm.zohoViewId}`
+                : ""
+            }
+            disabled={
+              isLoading ||
+              (dataFiles.length === 0 &&
+                segments.length === 0 &&
+                views.length === 0)
+            }
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "4px",
+              border: "1px solid #ddd",
+              fontSize: "14px",
+            }}
+          >
+            <option value="">Select list, segment, or view</option>
+            {dataFiles.length > 0 && (
+              <optgroup label="Lists">
+                {dataFiles.map((file) => (
+                  <option key={`list-${file.id}`} value={`list-${file.id}`}>
+                    {file.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {segments.length > 0 && (
+              <optgroup label="Segments">
+                {segments.map((segment) => (
+                  <option key={`segment-${segment.id}`} value={`segment-${segment.id}`}>
+                    {segment.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {views.length > 0 && (
+              <optgroup label="Views">
+                {views.map((view) => (
+                  <option key={`view-${view.id}`} value={`view-${view.id}`}>
+                    {view.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </div>
+
+        {/* Description */}
+        <div style={{ marginBottom: "20px" }}>
+          <label style={{ fontWeight: 500, display: "block", marginBottom: "4px" }}>Description</label>
+          <textarea
+            name="description"
+            value={campaignForm.description}
+            onChange={handleCampaignFormChange}
+            placeholder="Enter campaign description"
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "4px",
+              border: "1px solid #ddd",
+              fontSize: "14px",
+              minHeight: "80px",
+              resize: "vertical",
+            }}
+            rows={3}
+          />
+        </div>
+      </CommonSidePanel>
+      {showSuccessToast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#E6F4EF",        // soft pastel green
+            color: "#2F3A34",              // dark grey text (not black)
+            padding: "14px 22px",
+            borderRadius: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
+            zIndex: 99999,
+            minWidth: 420,
+            fontSize: 16,
+            fontWeight: 500,
+            overflow: "hidden",
+          }}
+        >
+          {/* Timer Bar */}
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              height: 4,
+              width: "100%",
+              background: "#1F9D74",  // darker green line like image
+              animation: "toastProgress 3s linear forwards",
+            }}
+          />
+
+          {/* Check Circle */}
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "#1F9D74",   // same green as timer
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}
+          >
+            ✓
+          </div>
+
+          {/* Message */}
+          <div style={{ flex: 1 }}>
+            {toastMessage}
+          </div>
+
+          {/* Close Button */}
+          <div
+            onClick={() => setShowSuccessToast(false)}
+            style={{
+              cursor: "pointer",
+              fontSize: 30,
+              fontWeight: 500,
+              color: "#6B7280",   // soft gray like screenshot
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </div>
+        </div>
+      )}
+      {showErrorToast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#FDECEC",        // pastel red background
+            color: "#2F3A34",              // dark soft red text
+            padding: "14px 22px",
+            borderRadius: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
+            zIndex: 99999,
+            minWidth: 420,
+            fontSize: 16,
+            fontWeight: 500,
+            overflow: "hidden",
+          }}
+        >
+          {/* Timer Bar */}
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              height: 4,
+              width: "100%",
+              background: "#DC2626",   // strong red timer
+              animation: "toastProgress 3s linear forwards",
+            }}
+          />
+
+          {/* Error Circle */}
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "#DC2626",   // same red as timer
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 16,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}
+          >
+            !
+          </div>
+
+          {/* Message */}
+          <div style={{ flex: 1 }}>
+            {toastMessage}
+          </div>
+
+          {/* Close Button */}
+          <div
+            onClick={() => setShowErrorToast(false)}
+            style={{
+              cursor: "pointer",
+              fontSize: 30,
+              fontWeight: 500,
+              color: "#9CA3AF",  // same gray as success close
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </div>
+        </div>
+      )}
+
+      <AppModal isOpen={appModal.isOpen} onClose={appModal.hideModal} {...appModal.config} />
+    </div>
+  );
+};
+
+export default CampaignManagement;
